@@ -18,6 +18,9 @@
 // CHANNEL_6 - Aux1
 
 //---------Defines---------
+//Accessory Pins
+#define KEY_PIN 22
+#define LED_PIN 16
 
 // Reciever Pins
 #define CHANNEL_1 21
@@ -168,6 +171,10 @@ void setup(){
   // Set the output pins for the two motor directions
   pinMode(D_LEFT,OUTPUT);
   pinMode(D_RIGHT,OUTPUT);
+  
+  // Set pin mode for accessories
+  pinMode(KEY_PIN,INPUT_PULLUP);
+  pinMode(LED_PIN,OUTPUT);
 }
 
 void loop(){
@@ -264,8 +271,16 @@ void loop(){
       }
     }
     // Set the motors to their respective speeds
-    analogWrite(M_LEFT,speedLeft);
-    analogWrite(M_RIGHT,speedRight);
+    if(digitalRead(KEY_PIN) == HIGH){
+      analogWrite(M_LEFT,speedLeft);
+      analogWrite(M_RIGHT,speedRight); 
+      digitalWrite(LED_PIN,HIGH);
+    }else{
+      analogWrite(M_LEFT,0);
+      analogWrite(M_RIGHT,0); 
+      digitalWrite(LED_PIN,LOW);
+      return;
+    }
   }
 
   if((curDirection != prevDirection) || (curGear != prevGear)){
@@ -278,23 +293,22 @@ void loop(){
     switch(curDirection){
       case DIRECTION_FORWARD:
         digitalWrite(D_LEFT,LOW);
-        digitalWrite(D_RIGHT,LOW);
+        digitalWrite(D_RIGHT,HIGH);
         break;
       case DIRECTION_REVERSE:
         digitalWrite(D_LEFT,HIGH);
-        digitalWrite(D_RIGHT,HIGH);
+        digitalWrite(D_RIGHT,LOW);
         break;
       case DIRECTION_LEFT:
         digitalWrite(D_LEFT,LOW);
-        digitalWrite(D_RIGHT,HIGH);
+        digitalWrite(D_RIGHT,LOW);
         break;
       case DIRECTION_RIGHT:
         digitalWrite(D_LEFT,HIGH);
-        digitalWrite(D_RIGHT,LOW);
+        digitalWrite(D_RIGHT,HIGH);
         break;
     }
   }
-
 }
 
 // Interrupts for each channel, called on a signal change
