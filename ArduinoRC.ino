@@ -17,16 +17,23 @@
 // CHANNEL_5 - Gear
 // CHANNEL_6 - Aux1
 
+//---------Includes--------
+#include <NewPing.h>
+
 //---------Defines---------
 // Accessory Pins
 #define KEY_PIN 22
 #define M_LED_PIN 16
+#define A_LED_PIN 15
 
 // Ping Pins
-#define PING_F_TRIGGER 25
-#define PING_F_ECHO 24
-#define PING_R_TRIGGER 27 
-#define PING_R_ECHO 26
+#define PING_F_TRIGGER 24
+#define PING_F_ECHO 25
+#define PING_R_TRIGGER 26 
+#define PING_R_ECHO 27
+
+// Max distance to check, otherwise report clear
+#define PING_MAX_DISTANCE 80
 
 // Reciever Pins
 #define CHANNEL_1 21
@@ -131,6 +138,17 @@ uint32_t channel4Start;
 uint32_t channel5Start;
 uint32_t channel6Start;
 
+// Storage for PING sensor times
+uint32_t fDistance;
+uint32_t rDistance;
+
+// Ping sensors
+NewPing fPing(PING_F_TRIGGER, PING_F_ECHO, PING_MAX_DISTANCE);
+NewPing rPing(PING_R_TRIGGER, PING_R_ECHO, PING_MAX_DISTANCE);
+
+// Global timing for autonomous LED
+uint32_t autoLEDStart;
+
 // Values
 uint8_t curThrottle = 0;
 uint8_t curGear = GEAR_IDLE;
@@ -180,7 +198,8 @@ void setup(){
   
   // Set pin mode for accessories
   pinMode(KEY_PIN,INPUT_PULLUP);
-  pinMode(LED_PIN,OUTPUT);
+  pinMode(M_LED_PIN,OUTPUT);
+  pinMode(A_LED_PIN,OUTPUT);
 }
 
 void loop(){
@@ -226,104 +245,124 @@ void loop(){
   //Process changed switches
   if(channelFlags & CHANNEL_5_FLAG){
     switch1 = (channel5In > CHANNEL_5_MID) ? true : false;
-  } 
+  }
+  
   if(channelFlags & CHANNEL_6_FLAG){
     switch2 = (channel6In > CHANNEL_5_MID) ? true : false;
+    // Enable or disable the auto led
+    digitalWrite(A_LED_PIN,(switch2) ? HIGH : LOW);      
   }
 
 
   if(digitalRead(KEY_PIN) == HIGH){
-    // Process changed throttle
-    if(channelFlags & CHANNEL_3_FLAG){
-      // Constrain the value between the channel min and max
-      channel3In = constrain(channel3In, CHANNEL_3_MIN, CHANNEL_3_MAX);
-  
-      if(channel3In > CHANNEL_3_MID){
-        // Map the throttle from mid to max to pwm values 0-255
-        curThrottle = map(channel3In,CHANNEL_3_MID,CHANNEL_3_MAX,PWM_MIN,PWM_MAX);
-        // Input is more then mid, so we're going forward.
-        curDirection = (curThrottle < IDLE_MARGIN)? DIRECTION_STOP : DIRECTION_FORWARD;
+    if (switch2){
+      // Get front ping delay in microseconds
+      fDistance = fPing.ping() / US_ROUNDTRIP_CM;
+      
+      if (fDistance == 0 || fDistance > 10){
+        digitalWrite(D_LEFT,LOW);
+        digitalWrite(D_RIGHT,HIGH);
+        
+        analogWrite(M_LEFT,PWM_MAX / 3);
+        analogWrite(M_RIGHT,PWM_MAX / 3);
+      }else{
+        analogWrite(M_LEFT,PWM_MIN);
+        analogWrite(M_RIGHT,PWM_MIN);        
       }
-      else{
-        // Map the throttle from min to mid to pwm values 0-255
-        curThrottle = map(channel3In,CHANNEL_3_MIN,CHANNEL_3_MID,PWM_MAX,PWM_MIN);
-        // Input is less than mid, so we're in reverse
-        curDirection = (curThrottle < IDLE_MARGIN)? DIRECTION_STOP : DIRECTION_REVERSE;
+      
+      delay(50);
+    }else{
+      // Process changed throttle
+      if(channelFlags & CHANNEL_3_FLAG){
+        // Constrain the value between the channel min and max
+        channel3In = constrain(channel3In, CHANNEL_3_MIN, CHANNEL_3_MAX);
+    
+        if(channel3In > CHANNEL_3_MID){
+          // Map the throttle from mid to max to pwm values 0-255
+          curThrottle = map(channel3In,CHANNEL_3_MID,CHANNEL_3_MAX,PWM_MIN,PWM_MAX);
+          // Input is more then mid, so we're going forward.
+          curDirection = (curThrottle < IDLE_MARGIN)? DIRECTION_STOP : DIRECTION_FORWARD;
+        }
+        else{
+          // Map the throttle from min to mid to pwm values 0-255
+          curThrottle = map(channel3In,CHANNEL_3_MIN,CHANNEL_3_MID,PWM_MAX,PWM_MIN);
+          // Input is less than mid, so we're in reverse
+          curDirection = (curThrottle < IDLE_MARGIN)? DIRECTION_STOP : DIRECTION_REVERSE;
+        }
+        curGear = (curThrottle < IDLE_MARGIN) ? GEAR_IDLE : GEAR_FULL;
       }
-      curGear = (curThrottle < IDLE_MARGIN) ? GEAR_IDLE : GEAR_FULL;
+    
+      // Process changed steering, also process when throttle changes because it will overwrite a turn
+      if((channelFlags & CHANNEL_2_FLAG) || (channelFlags & CHANNEL_3_FLAG)){
+        // Left and right speed values
+        uint8_t speedLeft = curThrottle;
+        uint8_t speedRight = curThrottle;
+        // Constrain the value to its min and max
+        channel2In = constrain(channel2In,CHANNEL_2_MIN,CHANNEL_2_MAX);
+    
+        // If we're within the idle margin on the throttle
+        if(curGear == GEAR_IDLE){
+          // If the steering is greater than the mid point plus the error margin, we're going to spin right
+          if(channel2In > (CHANNEL_2_MID + ERROR_MARGIN)){
+            curDirection = DIRECTION_RIGHT;
+            speedRight = speedLeft = map(channel2In,CHANNEL_2_MID,CHANNEL_2_MAX,PWM_MIN,PWM_MAX);
+          }
+          // If it is less than the mid point minus the error margin, spin left
+          else if(channel2In < (CHANNEL_2_MID - ERROR_MARGIN)){
+            curDirection = DIRECTION_LEFT;
+            speedRight = speedLeft = map(channel2In,CHANNEL_2_MIN,CHANNEL_2_MID,PWM_MAX,PWM_MIN);
+          }else{
+            // If we're in idle with no steering, we're stopped.
+            speedRight = speedLeft = PWM_MIN; 
+          }
+        }
+        // Otherwise, we're moving
+        else{
+          if(channel2In > (CHANNEL_2_MID + ERROR_MARGIN)){
+            speedLeft = map(channel2In,CHANNEL_2_MID,CHANNEL_2_MAX,curThrottle,PWM_MIN);
+          }
+          else if(channel2In < (CHANNEL_2_MID - ERROR_MARGIN)){
+            speedRight = map(channel2In,CHANNEL_2_MIN,CHANNEL_2_MID,PWM_MIN,curThrottle);
+          }
+        }
+        // Set the motors to their respective speeds
+        analogWrite(M_LEFT,speedLeft);
+        analogWrite(M_RIGHT,speedRight);
+      }
+    
+      if((curDirection != prevDirection) || (curGear != prevGear)){
+        prevGear = curGear;
+        prevDirection = curDirection;
+    
+        digitalWrite(D_LEFT,LOW);
+        digitalWrite(D_RIGHT,LOW);
+    
+        switch(curDirection){
+          case DIRECTION_FORWARD:
+            digitalWrite(D_LEFT,LOW);
+            digitalWrite(D_RIGHT,HIGH);
+            break;
+          case DIRECTION_REVERSE:
+            digitalWrite(D_LEFT,HIGH);
+            digitalWrite(D_RIGHT,LOW);
+            break;
+          case DIRECTION_LEFT:
+            digitalWrite(D_LEFT,LOW);
+            digitalWrite(D_RIGHT,LOW);
+            break;
+          case DIRECTION_RIGHT:
+            digitalWrite(D_LEFT,HIGH);
+            digitalWrite(D_RIGHT,HIGH);
+            break;
+        }
+      }
     }
-  
-    // Process changed steering, also process when throttle changes because it will overwrite a turn
-    if((channelFlags & CHANNEL_2_FLAG) || (channelFlags & CHANNEL_3_FLAG)){
-      // Left and right speed values
-      uint8_t speedLeft = curThrottle;
-      uint8_t speedRight = curThrottle;
-      // Constrain the value to its min and max
-      channel2In = constrain(channel2In,CHANNEL_2_MIN,CHANNEL_2_MAX);
-  
-      // If we're within the idle margin on the throttle
-      if(curGear == GEAR_IDLE){
-        // If the steering is greater than the mid point plus the error margin, we're going to spin right
-        if(channel2In > (CHANNEL_2_MID + ERROR_MARGIN)){
-          curDirection = DIRECTION_RIGHT;
-          speedRight = speedLeft = map(channel2In,CHANNEL_2_MID,CHANNEL_2_MAX,PWM_MIN,PWM_MAX);
-        }
-        // If it is less than the mid point minus the error margin, spin left
-        else if(channel2In < (CHANNEL_2_MID - ERROR_MARGIN)){
-          curDirection = DIRECTION_LEFT;
-          speedRight = speedLeft = map(channel2In,CHANNEL_2_MIN,CHANNEL_2_MID,PWM_MAX,PWM_MIN);
-        }else{
-          // If we're in idle with no steering, we're stopped.
-          speedRight = speedLeft = PWM_MIN; 
-        }
-      }
-      // Otherwise, we're moving
-      else{
-        if(channel2In > (CHANNEL_2_MID + ERROR_MARGIN)){
-          speedLeft = map(channel2In,CHANNEL_2_MID,CHANNEL_2_MAX,curThrottle,PWM_MIN);
-        }
-        else if(channel2In < (CHANNEL_2_MID - ERROR_MARGIN)){
-          speedRight = map(channel2In,CHANNEL_2_MIN,CHANNEL_2_MID,PWM_MIN,curThrottle);
-        }
-      }
-      // Set the motors to their respective speeds
-      analogWrite(M_LEFT,speedLeft);
-      analogWrite(M_RIGHT,speedRight);
-    }
-  
-    if((curDirection != prevDirection) || (curGear != prevGear)){
-      prevGear = curGear;
-      prevDirection = curDirection;
-  
-      digitalWrite(D_LEFT,LOW);
-      digitalWrite(D_RIGHT,LOW);
-  
-      switch(curDirection){
-        case DIRECTION_FORWARD:
-          digitalWrite(D_LEFT,LOW);
-          digitalWrite(D_RIGHT,HIGH);
-          break;
-        case DIRECTION_REVERSE:
-          digitalWrite(D_LEFT,HIGH);
-          digitalWrite(D_RIGHT,LOW);
-          break;
-        case DIRECTION_LEFT:
-          digitalWrite(D_LEFT,LOW);
-          digitalWrite(D_RIGHT,LOW);
-          break;
-        case DIRECTION_RIGHT:
-          digitalWrite(D_LEFT,HIGH);
-          digitalWrite(D_RIGHT,HIGH);
-          break;
-      }
-    }
-
     // Set the LED for motor power ON   
     digitalWrite(M_LED_PIN,HIGH);
   }else{    
     // Disable motors, turn off motor LED
-    analogWrite(M_LEFT,0);
-    analogWrite(M_RIGHT,0); 
+    analogWrite(M_LEFT,PWM_MIN);
+    analogWrite(M_RIGHT,PWM_MIN); 
     digitalWrite(M_LED_PIN,LOW);
   }
 }
