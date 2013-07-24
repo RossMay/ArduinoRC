@@ -18,9 +18,15 @@
 // CHANNEL_6 - Aux1
 
 //---------Defines---------
-//Accessory Pins
+// Accessory Pins
 #define KEY_PIN 22
 #define LED_PIN 16
+
+// Ping Pins
+#define PING_F_TRIGGER 25
+#define PING_F_ECHO 24
+#define PING_R_TRIGGER 27 
+#define PING_R_ECHO 26
 
 // Reciever Pins
 #define CHANNEL_1 21
